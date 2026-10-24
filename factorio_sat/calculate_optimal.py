@@ -32,13 +32,13 @@ def factors(value: int) -> Iterator[Tuple[int, int]]:
                 yield b, a
 
 
-def solve_balancer(network, size: Tuple[int, int, int], solver: str):
+def solve_balancer(network, size: Tuple[int, int, int], solver: str, aligned: bool = False):
     maximum_underground_length, width, height = size
 
     network = deduplicate_network(network)
     grid = belt_balancer.create_balancer(network, width, height, maximum_underground_length)
     grid.prevent_intersection()
-    belt_balancer.setup_balancer_ends(grid, network, True, False)
+    belt_balancer.setup_balancer_ends(grid, network, aligned, False)
 
     optimisations.expand_underground(grid, min_x=1, max_x=grid.width - 2)
     optimisations.apply_generic_optimisations(grid)
@@ -237,6 +237,9 @@ def main():
 
     parser = argparse.ArgumentParser(description='Calculates optimal balancers')
     parser.add_argument('--database', type=str, default='optimal_balancers.json', help='File for storing/querying results')
+    parser.add_argument('--aligned', action='store_true',
+                        help='Require the smaller of the input/output blocks to lie within the span of the larger one '
+                        '(the previous, always-on behaviour). Off by default: unaligned layouts can be shorter.')
 
     subparsers = parser.add_subparsers(dest='mode', required=True)
     query_parser = subparsers.add_parser('query')
@@ -273,6 +276,12 @@ def main():
     try:
         with open(result_file) as f:
             data = json.load(f)
+        # results (especially "does not exist" ones) only hold for the alignment mode they were computed in;
+        # databases written before this flag existed were always aligned
+        db_aligned = data.pop('_aligned', True if data else None)
+        if db_aligned is not None and db_aligned != args.aligned:
+            raise SystemExit(f'{result_file} holds {"aligned" if db_aligned else "unaligned"} results; '
+                             f'use --database to pick another file or {"add" if db_aligned else "drop"} --aligned')
         for store in stores:
             item = data.get(store.network_name)
             if item is None:
@@ -282,7 +291,7 @@ def main():
         pass
 
     def save_progress():
-        data = {}
+        data = {'_aligned': args.aligned}
         for store in stores:
             data[store.network_name] = store.to_json()
         with open(result_file, 'w') as f:
@@ -317,7 +326,7 @@ def main():
                 if next_size is None:
                     break
                 print(f'{store.network_name}: Start {next_size}')
-                solution = await loop.run_in_executor(executor, solve_balancer, store.network, next_size, args.solver)
+                solution = await loop.run_in_executor(executor, solve_balancer, store.network, next_size, args.solver, args.aligned)
 
                 store.add_solution(next_size, solution)
                 store.clean()
