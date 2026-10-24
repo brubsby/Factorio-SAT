@@ -44,7 +44,7 @@ def setup_balancer_ends_with_offsets(grid, network, start_offset: int, end_offse
 
 def setup_balancer_input(grid: Grid, tiles: Sequence[TileTemplate], direction: int, count: int, rest_empty: bool = True):
     assert count <= len(tiles)
-    offsets = [grid.allocate_variable() for _ in range(len(tiles) - count)]
+    offsets = [grid.allocate_variable() for _ in range(len(tiles) - count + 1)]
 
     if len(offsets) == 0:
         for tile in tiles:
@@ -66,7 +66,7 @@ def setup_balancer_input(grid: Grid, tiles: Sequence[TileTemplate], direction: i
 
 def setup_balancer_output(grid: Grid, tiles: Sequence[TileTemplate], direction: int, count: int, rest_empty: bool = True):
     assert count <= len(tiles)
-    offsets = [grid.allocate_variable() for _ in range(len(tiles) - count)]
+    offsets = [grid.allocate_variable() for _ in range(len(tiles) - count + 1)]
 
     if len(offsets) == 0:
         for tile in tiles:
