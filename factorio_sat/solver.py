@@ -495,6 +495,19 @@ class Grid(FactorioGrid[TileTemplate, Dict[str, Any]]):
                     [-tile_b.input_direction[direction.reverse], -tile_b.output_direction[direction.prev]],
                 ])
 
+                # No underground entrance or exit may run crosswise in front of a splitter, whether or not that
+                # splitter side outputs. The rule above already keeps crosswise belts out, but undergrounds slipped
+                # through: in the game a splitter pushes items into the side of an underground end in front of it,
+                # even from an output the network leaves unused (a dangling port), which adds an arc the network
+                # does not have. On a used output the clause is implied anyway (tile_b must accept from behind).
+                for splitter_side in (tile_a.input_direction[direction], tile_a.output_direction[direction]):
+                    self.clauses += implies([splitter_side, tile_a.is_splitter, -tile_b.is_splitter], [
+                        [-tile_b.is_underground_in, -tile_b.input_direction[direction.next]],
+                        [-tile_b.is_underground_in, -tile_b.input_direction[direction.prev]],
+                        [-tile_b.is_underground_out, -tile_b.output_direction[direction.next]],
+                        [-tile_b.is_underground_out, -tile_b.output_direction[direction.prev]],
+                    ])
+
     def itersolve(self, important_variables=set(), solver='g3', ignore_colour=False):
         important_variables = set(important_variables)
         for x in range(self.width):
