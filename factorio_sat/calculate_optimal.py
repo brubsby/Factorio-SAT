@@ -18,6 +18,7 @@ MAXIMUM_UNDERGROUND_LENGTHS = {
     'normal': 4,
     'fast': 6,
     'express': 8,
+    'turbo': 10,  # Space Age
 }
 
 
@@ -180,6 +181,7 @@ def export_crosstable(stores: List[NetworkSolutionStore], crosstable_filename: s
         (4, '\U0001f7e8'),
         (6, '\U0001f7e5'),
         (8, '\U0001f7e6'),
+        (10, '\U0001f7e9'),
     ]
     impossible = '\u274c'
     # unknown = '\u2753'

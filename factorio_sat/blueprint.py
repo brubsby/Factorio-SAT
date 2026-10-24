@@ -18,6 +18,7 @@ class TransportBeltLevel(enum.Enum):
     NORMAL = 'transport-belt', 'underground-belt', 'splitter'
     FAST = 'fast-transport-belt', 'fast-underground-belt', 'fast-splitter'
     EXPRESS = 'express-transport-belt', 'express-underground-belt', 'express-splitter'
+    TURBO = 'turbo-transport-belt', 'turbo-underground-belt', 'turbo-splitter'
 
     def __init__(self, belt_variant: str, underground_variant: str, splitter_variant: str):
         self.belt_variant = belt_variant
