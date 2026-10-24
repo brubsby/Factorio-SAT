@@ -8,36 +8,40 @@ from .util import LiteralType, break_symmetry, implies, invert_components, set_l
 
 
 def prevent_empty_along_underground(grid: Grid):
-    underground_length = min(grid.underground_length, max(grid.width, grid.height) - 2)
+    # Per tier: only a same-tier entrance/exit pair is a pair (and replaceable by belts over empty tiles)
+    for t, tier_length in enumerate(grid.tier_lengths):
+        underground_length = min(tier_length, max(grid.width, grid.height) - 2)
 
-    for direction in Direction:
-        dx, dy = direction.vec
-        for x in range(grid.width):
-            for y in range(grid.height):
-                tiles = [grid.get_tile_instance(x, y)]
-                for i in range(1, underground_length + 2):
-                    new_tile = grid.get_tile_instance_offset(x, y, dx * i, dy * i)
-                    if new_tile is None:
-                        break
+        for direction in Direction:
+            dx, dy = direction.vec
+            for x in range(grid.width):
+                for y in range(grid.height):
+                    tiles = [grid.get_tile_instance(x, y)]
+                    for i in range(1, underground_length + 2):
+                        new_tile = grid.get_tile_instance_offset(x, y, dx * i, dy * i)
+                        if new_tile is None:
+                            break
 
-                    tiles.append(new_tile)
+                        tiles.append(new_tile)
 
-                    start, *middle, end = tiles
-                    if len(middle) > 0:
-                        clause = [
-                            -start.is_underground_in,
-                            -start.input_direction[direction],
-                        ]
+                        start, *middle, end = tiles
+                        if len(middle) > 0:
+                            clause = [
+                                -start.is_underground_in,
+                                -start.input_direction[direction],
+                                *(-lit for lit in grid.tier_is(start, t)),
+                            ]
 
-                        for tile in middle:
-                            clause.append(-tile.is_empty)
+                            for tile in middle:
+                                clause.append(-tile.is_empty)
 
-                        clause += [
-                            -end.is_underground_out,
-                            -end.output_direction[direction],
-                        ]
+                            clause += [
+                                -end.is_underground_out,
+                                -end.output_direction[direction],
+                                *(-lit for lit in grid.tier_is(end, t)),
+                            ]
 
-                        grid.clauses.append(clause)
+                            grid.clauses.append(clause)
 
 
 def prevent_small_loops(grid: Grid):
@@ -110,6 +114,7 @@ def glue_splitters(grid: Grid):
 
 def shrink_underground(grid: Grid):
     # Has some correctness problems
+    assert not grid.multi_tier
     for x in range(grid.width):
         for y in range(grid.height):
             tile_a = grid.get_tile_instance(x, y)
@@ -172,6 +177,7 @@ def expand_underground_infinite(grid: Grid, min_x: int = 0, min_y: int = 0, max_
 
 def expand_underground(grid: Grid, min_x: int = 0, min_y: int = 0, max_x: Optional[int] = None, max_y: Optional[int] = None):
     if grid.underground_length == float('inf'):
+        assert not grid.multi_tier
         expand_underground_infinite(grid, min_x, min_y, max_x, max_y)
         return
 
@@ -180,7 +186,13 @@ def expand_underground(grid: Grid, min_x: int = 0, min_y: int = 0, max_x: Option
     if max_y is None:
         max_y = grid.height - 1
 
-    for underground_length in range(2, grid.underground_length + 1):
+    # Per tier: a tier-t pair next to a straight belt could be stretched over it (within tier t's gap)
+    for t, tier_length in enumerate(grid.tier_lengths):
+        _expand_underground_tier(grid, t, tier_length, min_x, min_y, max_x, max_y)
+
+
+def _expand_underground_tier(grid: Grid, t: int, tier_length: int, min_x: int, min_y: int, max_x: int, max_y: int):
+    for underground_length in range(2, tier_length + 1):
         for x in range(min_x, max_x + 1):
             for y in range(min_y, max_y + 1):
                 for direction in Direction:
@@ -200,20 +212,20 @@ def expand_underground(grid: Grid, min_x: int = 0, min_y: int = 0, max_x: Option
                         -tiles[0].output_direction[direction],
                         -tiles[0].is_belt,
 
-                        tiles[1].underground[direction],
+                        grid.ug(tiles[1], t)[direction],
 
-                        *(-tile.underground[direction] for tile in tiles[2:-1]),
+                        *(-grid.ug(tile, t)[direction] for tile in tiles[2:-1]),
 
-                        tiles[-1].underground[direction],
+                        grid.ug(tiles[-1], t)[direction],
                     ])
 
                     # I--OB
                     grid.clauses.append([
-                        tiles[0].underground[direction],
+                        grid.ug(tiles[0], t)[direction],
 
-                        *(-tile.underground[direction] for tile in tiles[1:-2]),
+                        *(-grid.ug(tile, t)[direction] for tile in tiles[1:-2]),
 
-                        tiles[-2].underground[direction],
+                        grid.ug(tiles[-2], t)[direction],
 
                         -tiles[-1].input_direction[direction],
                         -tiles[-1].output_direction[direction],
@@ -270,19 +282,22 @@ def get_mergeable_underground_variations(underground_length: int):
 
 
 def prevent_mergeable_underground(grid: Grid):
-    max_underground_length = min(grid.underground_length, max(grid.width, grid.height) - 2)
+    # Per tier: two back-to-back tier-t pairs that fit one tier-t gap could be merged
+    for t, tier_length in enumerate(grid.tier_lengths):
+        max_underground_length = min(tier_length, max(grid.width, grid.height) - 2)
 
-    for underground_length in range(4, max_underground_length + 1):
-        for x in range(grid.width):
-            for y in range(grid.height):
-                for direction in Direction:
-                    dx, dy = direction.vec
-                    tiles = [grid.get_tile_instance_offset(x, y, dx * i, dy * i) for i in range(underground_length + 2)]
-                    if any(tile is None for tile in tiles):
-                        continue
+        for underground_length in range(4, max_underground_length + 1):
+            for x in range(grid.width):
+                for y in range(grid.height):
+                    for direction in Direction:
+                        dx, dy = direction.vec
+                        tiles = [grid.get_tile_instance_offset(x, y, dx * i, dy * i) for i in range(underground_length + 2)]
+                        if any(tile is None for tile in tiles):
+                            continue
 
-                    for variation in get_mergeable_underground_variations(underground_length):
-                        grid.clauses.append([-set_literal(tile.underground[direction], is_underground) for tile, is_underground in zip(tiles, variation)])
+                        for variation in get_mergeable_underground_variations(underground_length):
+                            grid.clauses.append([-set_literal(grid.ug(tile, t)[direction], is_underground)
+                                                 for tile, is_underground in zip(tiles, variation)])
 
 
 def prevent_semicircles(grid: Grid):
@@ -322,6 +337,11 @@ def prevent_semicircles(grid: Grid):
 
 def prevent_underground_hook(grid: Grid):
     # TODO Make sound
+    for t in range(grid.tier_count):
+        _prevent_underground_hook_tier(grid, t)
+
+
+def _prevent_underground_hook_tier(grid: Grid, t: int):
     for x in range(grid.width):
         for y in range(grid.height):
             tile_underground_transition = grid.get_tile_instance(x, y)
@@ -352,9 +372,9 @@ def prevent_underground_hook(grid: Grid):
                     for in_direction in (inv_direction, tangent):
                         grid.clauses.append([
                             *tile_empty.all_direction,
-                            -tile_empty.underground[direction],
+                            -grid.ug(tile_empty, t)[direction],
 
-                            tile_underground_transition.underground[direction],
+                            grid.ug(tile_underground_transition, t)[direction],
 
                             # -tile_a.output_direction[direction],
                             -tile_a.input_direction[tangent],
@@ -370,9 +390,9 @@ def prevent_underground_hook(grid: Grid):
                     for out_direction in (direction, inv_tangent):
                         grid.clauses.append([
                             *tile_empty.all_direction,
-                            -tile_empty.underground[inv_direction],
+                            -grid.ug(tile_empty, t)[inv_direction],
 
-                            tile_underground_transition.underground[inv_direction],
+                            grid.ug(tile_underground_transition, t)[inv_direction],
 
                             # -tile_a.input_direction[inv_direction],
                             -tile_a.output_direction[inv_tangent],

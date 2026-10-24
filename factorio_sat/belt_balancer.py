@@ -121,7 +121,8 @@ def setup_balancer_ends_180(grid: Grid, network):
     setup_balancer_output(grid, tiles, 2, output_count, rest_empty=False)
 
 
-def create_balancer(network, width: int, height: int, underground_length: int) -> Grid:
+def create_balancer(network, width: int, height: int, underground_length: int, tiers=None) -> Grid:
+    """tiers: optional list of underground tiers (see solver.Grid); None keeps the single-tier encoding."""
     assert width > 0 and height > 0
 
     all_colours = set()
@@ -130,7 +131,7 @@ def create_balancer(network, width: int, height: int, underground_length: int) -
             all_colours.add(colour)
     all_colours.discard(None)
 
-    grid = Grid(width, height, max(all_colours) + 1, underground_length, {'node': OneHotTemplate(len(network))})
+    grid = Grid(width, height, max(all_colours) + 1, underground_length, {'node': OneHotTemplate(len(network))}, tiers=tiers)
     for colour in range(max(all_colours) + 1):
         if colour in all_colours:
             continue
@@ -316,6 +317,12 @@ def main():
     parser.add_argument('--fast', action='store_true', help='Enables all speed improving options')
     parser.add_argument('--aligned', action='store_true', help='Enforces balancer input aligns with output')
     parser.add_argument('--underground-length', type=int, default=4, help='Sets the maximum length of underground section (excludes ends)')
+    parser.add_argument('--tiers', type=str,
+                        help='Comma-separated underground tiers the layout may mix, e.g. yellow,red (gaps 4/6/8/10 for '
+                        'yellow/red/blue/turbo). Tiers may nest and cross on one line, as in the game. Overrides '
+                        '--underground-length; belts and splitters use the lowest tier listed')
+    parser.add_argument('--tier-max', action='append', default=[], metavar='TIER=K',
+                        help='At most K underground pairs of TIER (with --tiers), e.g. --tier-max red=2; repeatable')
     parser.add_argument('--all', action='store_true', help='Generate all belt balancers')
     parser.add_argument('--solver', type=str, default='Glucose3', help='Backend SAT solver to use')
     parser.add_argument('--partial', type=argparse.FileType('r'), help='Partial balancer to base solution from')
@@ -339,7 +346,11 @@ def main():
 
     network = deduplicate_network(network)
 
-    grid = create_balancer(network, args.width, args.height, args.underground_length)
+    tiers = args.tiers.split(',') if args.tiers else None
+    grid = create_balancer(network, args.width, args.height, args.underground_length, tiers)
+    for cap in args.tier_max:
+        name, k = cap.split('=')
+        grid.limit_tier(name, int(k))
     grid.prevent_intersection()
 
     if args.edge_splitters or args.fast:

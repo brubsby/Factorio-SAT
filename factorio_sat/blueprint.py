@@ -70,7 +70,8 @@ def make_blueprint(tiles, label: Optional[str] = None, level: TransportBeltLevel
             if direction != 0:
                 entity['direction'] = direction
         elif isinstance(tile, UndergroundBelt):
-            entity['name'] = level.underground_variant
+            # A mixed-tier layout names each underground's own tier; otherwise everything is at `level`
+            entity['name'] = level.underground_variant if tile.tier is None else TransportBeltLevel[tile.tier.upper()].underground_variant
 
             direction = tile.direction.factorio_direction
             if direction != 0:
@@ -143,9 +144,16 @@ def resolve_belt_input_directions(tiles):
         tiles[y, x] = Belt(input_direction, tile.output_direction)
 
 
-def import_blueprint(data: Any):
+def import_blueprint(data: Any, keep_tiers: Optional[bool] = None):
+    """keep_tiers: record each underground's tier on its tile (UndergroundBelt.tier). None (default): only when
+    the blueprint mixes underground tiers, so a single-tier blueprint decodes exactly as before."""
     if len(data['blueprint']['entities']) == 0:
         return np.full((0, 0), EmptyTile())
+
+    underground_tiers = {level.name.lower() for level in TransportBeltLevel for entity in data['blueprint']['entities']
+                         if entity['name'] == level.underground_variant}
+    if keep_tiers is None:
+        keep_tiers = len(underground_tiers) > 1
 
     entities = {}
 
@@ -164,7 +172,8 @@ def import_blueprint(data: Any):
         elif any(name == level.belt_variant for level in TransportBeltLevel):
             entities[floor_pos] = Belt(direction, direction)
         elif any(name == level.underground_variant for level in TransportBeltLevel):
-            entities[floor_pos] = UndergroundBelt(direction, entity['type'] == 'input')
+            tier = next(level.name.lower() for level in TransportBeltLevel if name == level.underground_variant) if keep_tiers else None
+            entities[floor_pos] = UndergroundBelt(direction, entity['type'] == 'input', tier)
         elif name in ('burner-inserter', 'inserter', 'fast-inserter', 'filter-inserter', 'stack-inserter', 'stack-filter-inserter'):
             entities[floor_pos] = Inserter(direction.reverse, 0)
         elif name == 'long-handed-inserter':

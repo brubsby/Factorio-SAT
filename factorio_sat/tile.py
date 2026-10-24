@@ -5,6 +5,20 @@ from .direction import Axis, Direction
 
 TILE_TYPES = {}
 
+# Underground tiers: name -> maximum gap (tiles strictly between the two ends; Factorio max_distance - 1).
+# The names match blueprint.TransportBeltLevel (lower-cased), the colours are the usual nicknames.
+UNDERGROUND_TIERS = {'normal': 4, 'fast': 6, 'express': 8, 'turbo': 10}
+TIER_ALIASES = {'yellow': 'normal', 'red': 'fast', 'blue': 'express', 'green': 'turbo'}
+
+
+def parse_tier(name: str) -> str:
+    """'yellow' / 'red' / 'blue' / 'turbo' (or the entity tier names normal / fast / express / turbo) -> tier name."""
+    name = name.strip().lower()
+    name = TIER_ALIASES.get(name, name)
+    if name not in UNDERGROUND_TIERS:
+        raise ValueError(f'Unknown belt tier {name!r} (expected one of {", ".join([*TIER_ALIASES, *UNDERGROUND_TIERS])})')
+    return name
+
 
 class BaseTile:
     type_key: ClassVar[str]
@@ -103,6 +117,9 @@ class UndergroundBelt(BeltConnectedTile, TransformableTile):
 
     direction: Direction
     is_input: bool
+    # Underground tier (a key of UNDERGROUND_TIERS), or None when the layout has one tier for everything
+    # (the blueprint level then decides). Only mixed-tier layouts set it, so single-tier output is unchanged.
+    tier: Optional[str] = None
 
     @property
     def input_direction(self) -> Optional[Direction]:
@@ -113,21 +130,24 @@ class UndergroundBelt(BeltConnectedTile, TransformableTile):
         return None if self.is_input else self.direction
 
     def flip_x(self) -> 'UndergroundBelt':
-        return type(self)(flip_x_direction(self.direction), self.is_input)
+        return type(self)(flip_x_direction(self.direction), self.is_input, self.tier)
 
     def rotate_90(self) -> 'UndergroundBelt':
-        return type(self)(self.direction.next, self.is_input)
+        return type(self)(self.direction.next, self.is_input, self.tier)
 
     def write(self) -> Dict[str, Any]:
-        return {
+        result = {
             **super().write(),
             'direction': int(self.direction),
             'is_input': self.is_input,
         }
+        if self.tier is not None:
+            result['tier'] = self.tier
+        return result
 
     @classmethod
     def read(cls, json_dict: Dict[str, Any]):
-        return cls(Direction(json_dict['direction']), json_dict['is_input'])
+        return cls(Direction(json_dict['direction']), json_dict['is_input'], json_dict.get('tier'))
 
 
 @dataclass(frozen=True)

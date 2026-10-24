@@ -84,6 +84,10 @@ calculate_optimal compute 16 length
 # Render optimal area balancers with maximum underground length 4
 calculate_optimal query 4 area | render
 
+# 6 to 6 balancer mixing yellow and red undergrounds (they may nest and cross on one line, as in the game),
+# with at most 2 red pairs; `blueprint encode` names each underground's tier (belts/splitters: --level)
+belt_balancer --fast networks/6x6 13 6 --tiers yellow,red --tier-max red=2 | blueprint encode
+
 # Generate and render interchanges for a 22 to 22 balancer made of two 11 to 11 balancers
 interchange --alternating --underground-length 8 --all 8 22 | render
 
