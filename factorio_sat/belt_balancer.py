@@ -125,12 +125,18 @@ def setup_balancer_ends_180(grid: Grid, network):
     setup_balancer_output(grid, tiles, 2, output_count, rest_empty=False)
 
 
-def create_balancer(network, width: int, height: int, underground_length: int, tiers=None, filtered=None) -> Grid:
+def create_balancer(network, width: int, height: int, underground_length: int, tiers=None, filtered=None,
+                    prio_fronts=None) -> Grid:
     """tiers: optional list of underground tiers (see solver.Grid); None keeps the single-tier encoding.
     filtered: optional node keys of `network` (splitters with one dangling output) whose dangling side gets a
     filter (see allow_filtered_fronts); by default those marked `filter` in network.settings (a deduplicated
     SetNetwork). Priorities need nothing in the encoding: every solution gets them written into its splitter tiles
-    (apply_settings, via Grid.solution_hook)."""
+    (apply_settings, via Grid.solution_hook).
+    prio_fronts: optional node keys (splitters with one dangling output, e.g. dangling_mergers(network)) whose
+    dangling side may have something in front of it, like a filtered splitter, but held off by OUTPUT PRIORITY toward
+    the used side instead of a filter (set on export wherever that front is not empty). The game then sends that side
+    only the overflow of the used one, so the built network differs from `network` by a priority arc: only a
+    re-parse checked with splnet's priority semantics can accept such a layout."""
     assert width > 0 and height > 0
 
     all_colours = set()
@@ -235,11 +241,18 @@ def create_balancer(network, width: int, height: int, underground_length: int, t
     settings = getattr(network, 'settings', None) or {}
     if filtered is None:
         filtered = {key for key, entry in settings.items() if 'filter' in entry}
-    if filtered:
-        allow_filtered_fronts(grid, network, filtered)
-    if settings:
-        grid.solution_hook = lambda solution: apply_settings(solution, network, settings)
+    prio_fronts = set(prio_fronts or ()) - set(filtered)
+    if filtered or prio_fronts:
+        allow_filtered_fronts(grid, network, set(filtered) | prio_fronts)
+    if settings or prio_fronts:
+        grid.solution_hook = lambda solution: apply_settings(solution, network, settings, prio_fronts=prio_fronts)
+    grid.prio_fronts = prio_fronts
     return grid
+
+
+def dangling_mergers(network):
+    """Node keys of the 2->1 splitters (both inputs used, exactly one output dangling): candidates for prio_fronts."""
+    return {key for key in network if None not in key[0] and sum(colour is None for colour in key[1]) == 1}
 
 
 def allow_filtered_fronts(grid: Grid, network, filtered):
@@ -268,14 +281,15 @@ def allow_filtered_fronts(grid: Grid, network, filtered):
                                      *([] if head is None else [head.node[i] for i in indices])])
 
 
-def apply_settings(solution, network, settings, filter_item=None):
+def apply_settings(solution, network, settings, filter_item=None, prio_fronts=()):
     """Write priorities and filters into a solved grid (cells as from Grid.solve / itersolve), in place.
 
     settings: {node key: {'in': X, 'out': Y, 'filter': item}} (network.network_settings). The side is read from the
     solution's colours: input priority goes on the half whose input has colour X, output priority on the half whose
     front tile has colour Y, and a filter (with output priority, as the game needs) on the half that outputs nothing.
     filter_item: also filter every other splitter with a dangling output that has something in front of it
-    (--filter-dangling). Returns the number of splitters set."""
+    (--filter-dangling). prio_fronts: node keys whose outputless half has something in front of it get output priority
+    on their other (used) half instead. Returns the number of splitters set."""
     keys = list(network.keys())
     height, width = solution.shape
     count = 0
@@ -300,13 +314,20 @@ def apply_settings(solution, network, settings, filter_item=None):
                 fx, fy = fronts[outless[0]]
                 if 0 <= fx < width and 0 <= fy < height and not solution[fy, fx]['is_empty']:
                     entry['filter'] = filter_item
-            if not entry:
+            prio_used = None
+            if key in prio_fronts and 'filter' not in entry and len(outless) == 1:
+                fx, fy = fronts[outless[0]]
+                if 0 <= fx < width and 0 <= fy < height and not solution[fy, fx]['is_empty']:
+                    prio_used = next(side for side in halves if side != outless[0])
+            if not entry and prio_used is None:
                 continue
             values = {}
             if 'in' in entry:
                 values['input_priority'] = next(side for side, pos in halves.items() if colour_at(pos) == entry['in'])
             if 'out' in entry:
                 values['output_priority'] = next(side for side, pos in fronts.items() if colour_at(pos) == entry['out'])
+            if prio_used is not None:
+                values['output_priority'] = prio_used
             if 'filter' in entry:
                 assert len(outless) == 1, (x, y, entry)
                 values['output_priority'] = outless[0]
