@@ -15,8 +15,10 @@ Lane mechanics encoded (measured in game, docs/lane-model.md L1-L11):
   * an entrance may be followed directly by its exit (gap 0): the belt-level encoder needs a segment tile between them.
 Splitter halves carry their output lanes in colour_o / colour_or (their colour / colour_r are the input lanes), so a
 splitter output can feed a side-fed entrance like any other feeder.
-Not encoded yet: sideloads onto belts and onto exits (they need priority-merge nodes in the colour model), lone exits
-used as lane filters (Raynquist's 1-1 TU and 3-3 lane balancers), priority splitters, mixed tiers.
+Belt sideloads are priority-merge nodes (merge_l / merge_r, network lines `M x0 x1 x2 y`); their feeder may be a belt,
+an exit or a splitter half. Lone exits (no entrance) take a side feeder's front lane.
+Not encoded yet: merges at underground ends (an entrance fed from behind and from a side, an exit with a live tunnel and
+a side feeder), priority splitters, mixed tiers.
 
 Reserved colours: 0 = EMPTY (a lane that never carries items: the unfed side of a side-fed entrance, or the absent lane
 of a splitter half whose other lane is used), 1 = DEAD (a splitter lane output that the network leaves dangling while
@@ -181,9 +183,10 @@ class LaneGrid(Grid):
                 ]
                 relax = self.front_relax.get(tile_a.is_splitter)
                 relaxed = [] if relax is None else [-relax]
+                # a belt crosswise in front of a splitter half is only allowed as a sideload target of that half
                 self.clauses += implies([tile_a.input_direction[direction], tile_a.is_splitter, -tile_b.is_splitter, *relaxed], [
-                    [-tile_b.input_direction[direction.next], -tile_b.output_direction[direction.next]],
-                    [-tile_b.input_direction[direction.prev], -tile_b.output_direction[direction.prev]],
+                    [-tile_b.input_direction[direction.next], -tile_b.output_direction[direction.next], tile_b.side_in[direction]],
+                    [-tile_b.input_direction[direction.prev], -tile_b.output_direction[direction.prev], tile_b.side_in[direction]],
                     [-tile_b.input_direction[direction.next], -tile_b.output_direction[direction]],
                     [-tile_b.input_direction[direction.prev], -tile_b.output_direction[direction]],
                     [-tile_b.input_direction[direction.reverse], -tile_b.output_direction[direction.next]],
