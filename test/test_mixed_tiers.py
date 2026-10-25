@@ -109,7 +109,7 @@ class TestMixedTiers(unittest.TestCase):
         tiles = np.empty((2, 8), dtype=object)
         tiles[:] = interleaved('normal', 'fast')
         bp = blueprint.make_blueprint(tiles)
-        bp['blueprint']['version'] = blueprint.encode_factorio_version(2, 0, 0, 0)
+        bp['blueprint']['version'] = 2 << 48  # major version in the top 16 bits
         for e in bp['blueprint']['entities']:
             if 'direction' in e:
                 e['direction'] *= 2
