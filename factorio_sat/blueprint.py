@@ -90,6 +90,14 @@ def make_blueprint(tiles, label: Optional[str] = None, level: TransportBeltLevel
             dx, dy = tile.direction.next.vec
             entity['position']['x'] += dx / 2
             entity['position']['y'] += dy / 2
+
+            if tile.input_priority is not None:
+                entity['input_priority'] = tile.input_priority
+            if tile.output_priority is not None:
+                entity['output_priority'] = tile.output_priority
+            if tile.filter is not None:
+                # 1.x blueprint format (this template's version); Factorio 2.x migrates it to {'name': ...}
+                entity['filter'] = tile.filter
         elif isinstance(tile, Inserter):
             # invert direction
 
@@ -172,8 +180,13 @@ def import_blueprint(data: Any, keep_tiers: Optional[bool] = None):
         if any(name == level.splitter_variant for level in TransportBeltLevel):
             dx, dy = direction.next.vec
             x, y = pos
-            entities[math.floor(x - dx / 2), math.floor(y - dy / 2)] = Splitter(direction, True)
-            entities[math.floor(x + dx / 2), math.floor(y + dy / 2)] = Splitter(direction, False)
+            # Priorities and the filter (1.x: item name, 2.x: {'name': ..., 'quality': ...}) go on both halves
+            item = entity.get('filter')
+            if isinstance(item, dict):
+                item = item.get('name')
+            settings = entity.get('input_priority'), entity.get('output_priority'), item
+            entities[math.floor(x - dx / 2), math.floor(y - dy / 2)] = Splitter(direction, True, *settings)
+            entities[math.floor(x + dx / 2), math.floor(y + dy / 2)] = Splitter(direction, False, *settings)
         elif any(name == level.belt_variant for level in TransportBeltLevel):
             entities[floor_pos] = Belt(direction, direction)
         elif any(name == level.underground_variant for level in TransportBeltLevel):

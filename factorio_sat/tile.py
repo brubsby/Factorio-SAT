@@ -1,5 +1,5 @@
 from typing import Any, ClassVar, Dict, Optional
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from .direction import Axis, Direction
 
@@ -150,12 +150,29 @@ class UndergroundBelt(BeltConnectedTile, TransformableTile):
         return cls(Direction(json_dict['direction']), json_dict['is_input'], json_dict.get('tier'))
 
 
+SIDES = ('left', 'right')
+
+
+def flip_side(side: Optional[str]) -> Optional[str]:
+    return None if side is None else SIDES[1 - SIDES.index(side)]
+
+
 @dataclass(frozen=True)
 class Splitter(BeltConnectedTile, TransformableTile):
+    """A splitter half. The head is the right half (relative to the facing), the other half is at direction.next.
+
+    input_priority / output_priority: 'left' / 'right' relative to the facing, as in the game, or None (fair).
+    filter: the filter item name, or None. Factorio sends the filter item to the output_priority side and every
+    other item to the other side, so with an item that never rides a belt (the deconstruction planner, as in
+    Raynquist's book) the output_priority side is blocked. The settings live on both halves; they take no part in
+    equality, so a set splitter still compares equal to the plain tile (layouts and lookups are unchanged)."""
     type_key: ClassVar[str] = 'splitter'
 
     direction: Direction
     is_head: bool
+    input_priority: Optional[str] = field(default=None, compare=False)
+    output_priority: Optional[str] = field(default=None, compare=False)
+    filter: Optional[str] = field(default=None, compare=False)
 
     @property
     def input_direction(self) -> Direction:
@@ -165,22 +182,36 @@ class Splitter(BeltConnectedTile, TransformableTile):
     def output_direction(self) -> Direction:
         return self.direction
 
+    @property
+    def side(self) -> str:
+        """Which half this tile is, relative to the facing."""
+        return 'right' if self.is_head else 'left'
+
+    def with_settings(self, input_priority=None, output_priority=None, filter=None) -> 'Splitter':
+        return type(self)(self.direction, self.is_head, input_priority, output_priority, filter)
+
     def flip_x(self) -> 'Splitter':
-        return type(self)(flip_x_direction(self.direction), not self.is_head)
+        return type(self)(flip_x_direction(self.direction), not self.is_head,
+                          flip_side(self.input_priority), flip_side(self.output_priority), self.filter)
 
     def rotate_90(self) -> 'Splitter':
-        return type(self)(self.direction.next, self.is_head)
+        return type(self)(self.direction.next, self.is_head, self.input_priority, self.output_priority, self.filter)
 
     def write(self) -> Dict[str, Any]:
-        return {
+        result = {
             **super().write(),
             'direction': int(self.direction),
             'is_head': self.is_head,
         }
+        for key in ('input_priority', 'output_priority', 'filter'):
+            if getattr(self, key) is not None:
+                result[key] = getattr(self, key)
+        return result
 
     @classmethod
     def read(cls, json_dict: Dict[str, Any]):
-        return cls(Direction(json_dict['direction']), json_dict['is_head'])
+        return cls(Direction(json_dict['direction']), json_dict['is_head'],
+                   json_dict.get('input_priority'), json_dict.get('output_priority'), json_dict.get('filter'))
 
 
 @dataclass(frozen=True)

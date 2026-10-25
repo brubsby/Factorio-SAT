@@ -62,6 +62,12 @@ class Grid(FactorioGrid[TileTemplate, Dict[str, Any]]):
         self.multi_tier = self.tier_count > 1
         self.colours = colours
         self.underground_length = underground_length
+        # Splitter tiles whose front may hold anything (the blocked half of a filtered splitter): tile.is_splitter ->
+        # a literal that, when true, lifts prevent_intersection's in-front-of-a-splitter rules for that tile.
+        # Empty unless belt_balancer.create_balancer is given filtered splitters, so other CNFs are unchanged.
+        self.front_relax: Dict[LiteralType, LiteralType] = {}
+        # Called on every parsed solution (in place), e.g. to write splitter priorities into the tiles
+        self.solution_hook: Optional[Callable[[Any], Any]] = None
 
         template = {
             'is_belt': BoolTemplate(),
@@ -578,8 +584,12 @@ class Grid(FactorioGrid[TileTemplate, Dict[str, Any]]):
 
                 self.clauses += literals_same(tile_a.output_direction[direction], tile_b.input_direction[direction])
 
+                # A filtered splitter's blocked half outputs nothing, whatever is in front (Splitter.filter)
+                relax = self.front_relax.get(tile_a.is_splitter)
+                relaxed = [] if relax is None else [-relax]
+
                 # Handles special splitter output case
-                self.clauses += implies([tile_a.input_direction[direction], tile_a.is_splitter, -tile_b.is_splitter], [
+                self.clauses += implies([tile_a.input_direction[direction], tile_a.is_splitter, -tile_b.is_splitter, *relaxed], [
                     [-tile_b.input_direction[direction.next], -tile_b.output_direction[direction.next]],
                     [-tile_b.input_direction[direction.prev], -tile_b.output_direction[direction.prev]],
 
@@ -596,12 +606,18 @@ class Grid(FactorioGrid[TileTemplate, Dict[str, Any]]):
                 # even from an output the network leaves unused (a dangling port), which adds an arc the network
                 # does not have. On a used output the clause is implied anyway (tile_b must accept from behind).
                 for splitter_side in (tile_a.input_direction[direction], tile_a.output_direction[direction]):
-                    self.clauses += implies([splitter_side, tile_a.is_splitter, -tile_b.is_splitter], [
+                    self.clauses += implies([splitter_side, tile_a.is_splitter, -tile_b.is_splitter, *relaxed], [
                         [-tile_b.is_underground_in, -tile_b.input_direction[direction.next]],
                         [-tile_b.is_underground_in, -tile_b.input_direction[direction.prev]],
                         [-tile_b.is_underground_out, -tile_b.output_direction[direction.next]],
                         [-tile_b.is_underground_out, -tile_b.output_direction[direction.prev]],
                     ])
+
+    def parse_solution(self, solution):
+        result = super().parse_solution(solution)
+        if self.solution_hook is not None:
+            self.solution_hook(result)
+        return result
 
     def itersolve(self, important_variables=set(), solver='g3', ignore_colour=False):
         important_variables = set(important_variables)

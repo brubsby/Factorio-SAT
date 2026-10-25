@@ -88,6 +88,13 @@ calculate_optimal query 4 area | render
 # with at most 2 red pairs; `blueprint encode` names each underground's tier (belts/splitters: --level)
 belt_balancer --fast networks/6x6 13 6 --tiers yellow,red --tier-max red=2 | blueprint encode
 
+# 1 to 3 TU balancer with an input-priority splitter. A network line may end in `in=X` (input priority on the
+# input of colour X), `out=Y` (output priority on the output of colour Y) or `filter` (the dangling output is
+# blocked by a deconstruction-planner filter, so anything may sit in front of it). The encoding is unchanged:
+# each solution gets the priority on whichever side colour X / Y landed. --free-ends lets the IO columns hold
+# loop-back belts and splitters, as Raynquist's 1-n TU do; `network parse` reads priorities and filters back
+belt_balancer networks/1x3_tu_priority 5 4 --use-ends --free-ends --underground-length 8 | blueprint encode
+
 # Generate and render interchanges for a 22 to 22 balancer made of two 11 to 11 balancers
 interchange --alternating --underground-length 8 --all 8 22 | render
 

@@ -9,10 +9,10 @@ from .direction import Direction
 from . import optimisations
 from . import blueprint
 from .cardinality import library_atleast, library_equals, quadratic_one
-from .network import deduplicate_network, get_input_output_colours, open_network
+from .network import deduplicate_network, get_input_output_colours, network_settings, open_network, DEFAULT_FILTER
 from .solver import Grid, TileTemplate
 from .template import OneHotTemplate
-from .tile import EmptyTile, Belt
+from .tile import EmptyTile, Belt, Splitter
 from .util import implies, invert_components, literals_different, set_all_false, set_number, set_numbers
 
 
@@ -42,7 +42,10 @@ def setup_balancer_ends_with_offsets(grid, network, start_offset: int, end_offse
         grid.set_tile(grid.width - 1, y, EmptyTile())
 
 
-def setup_balancer_input(grid: Grid, tiles: Sequence[TileTemplate], direction: int, count: int, rest_empty: bool = True):
+def setup_balancer_input(grid: Grid, tiles: Sequence[TileTemplate], direction: int, count: int, rest_empty: bool = True,
+                         rest_belts: bool = True):
+    """rest_empty=False: the other tiles of the column may be used (nothing enters through the edge there); they are
+    then belts unless rest_belts=False (empty tiles and splitters allowed too, as Raynquist's 1-n TU use)."""
     assert count <= len(tiles)
     offsets = [grid.allocate_variable() for _ in range(len(tiles) - count + 1)]
 
@@ -59,7 +62,7 @@ def setup_balancer_input(grid: Grid, tiles: Sequence[TileTemplate], direction: i
                 elif rest_empty:
                     consequences += set_all_false(tile.all_direction)
                 else:
-                    consequences += [[-tile.input_direction[direction]], [tile.is_belt]]
+                    consequences += [[-tile.input_direction[direction]]] + ([[tile.is_belt]] if rest_belts else [])
             grid.clauses += implies([literal], consequences)
     return offsets
 
@@ -86,13 +89,14 @@ def setup_balancer_output(grid: Grid, tiles: Sequence[TileTemplate], direction: 
     return offsets
 
 
-def setup_balancer_ends(grid: Grid, network, aligned: bool, use_ends: bool):
+def setup_balancer_ends(grid: Grid, network, aligned: bool, use_ends: bool, free_ends: bool = False):
+    """free_ends (with use_ends): the input column's other tiles may also be empty or splitters, not only belts."""
     (_, input_count), (_, output_count) = get_input_output_colours(network.elements())
 
     start_tiles = [grid.get_tile_instance(0, y) for y in range(grid.height)]
     end_tiles = [grid.get_tile_instance(grid.width - 1, y) for y in range(grid.height)]
 
-    start_offsets = setup_balancer_input(grid, start_tiles, 0, input_count, not use_ends)
+    start_offsets = setup_balancer_input(grid, start_tiles, 0, input_count, not use_ends, not free_ends)
     end_offsets = setup_balancer_output(grid, end_tiles, 0, output_count, not use_ends)
 
     if aligned:
@@ -121,8 +125,12 @@ def setup_balancer_ends_180(grid: Grid, network):
     setup_balancer_output(grid, tiles, 2, output_count, rest_empty=False)
 
 
-def create_balancer(network, width: int, height: int, underground_length: int, tiers=None) -> Grid:
-    """tiers: optional list of underground tiers (see solver.Grid); None keeps the single-tier encoding."""
+def create_balancer(network, width: int, height: int, underground_length: int, tiers=None, filtered=None) -> Grid:
+    """tiers: optional list of underground tiers (see solver.Grid); None keeps the single-tier encoding.
+    filtered: optional node keys of `network` (splitters with one dangling output) whose dangling side gets a
+    filter (see allow_filtered_fronts); by default those marked `filter` in network.settings (a deduplicated
+    SetNetwork). Priorities need nothing in the encoding: every solution gets them written into its splitter tiles
+    (apply_settings, via Grid.solution_hook)."""
     assert width > 0 and height > 0
 
     all_colours = set()
@@ -224,7 +232,90 @@ def create_balancer(network, width: int, height: int, underground_length: int, t
                     else:
                         grid.clauses += implies(precondition, [[tile00.output_direction[direction]], [tile01.output_direction[direction]]])
                         grid.clauses += implies(precondition, set_numbers(*output_colours, tile10.colour, tile11.colour))
+    settings = getattr(network, 'settings', None) or {}
+    if filtered is None:
+        filtered = {key for key, entry in settings.items() if 'filter' in entry}
+    if filtered:
+        allow_filtered_fronts(grid, network, filtered)
+    if settings:
+        grid.solution_hook = lambda solution: apply_settings(solution, network, settings)
     return grid
+
+
+def allow_filtered_fronts(grid: Grid, network, filtered):
+    """Let the dangling-output half of the given splitters have anything in front of it (a crosswise belt or
+    underground end, or a splitter half with no input), as Raynquist's filtered splitters do: in the game the filter
+    (deconstruction planner, never on a belt) on that side's output priority stops it outputting there.
+
+    Per tile, r -> the tile is the outputless half of a splitter whose node is in `filtered`; r then lifts
+    prevent_intersection's in-front rules for that tile only (Grid.front_relax). Call before prevent_intersection."""
+    keys = list(network.keys())
+    indices = [keys.index(key) for key in filtered]
+    for key in filtered:
+        if sum(colour is None for colour in key[1]) != 1:
+            raise ValueError(f'filtered splitter {key} needs exactly one dangling output')
+    for x in range(grid.width):
+        for y in range(grid.height):
+            tile = grid.get_tile_instance(x, y)
+            r = grid.allocate_variable()
+            grid.front_relax[tile.is_splitter] = r
+            grid.clauses.append([-r, tile.is_splitter])
+            grid.clauses += [[-r, -lit] for lit in tile.output_direction]
+            grid.clauses.append([-r, -tile.is_splitter_head, *[tile.node[i] for i in indices]])
+            for direction in Direction:
+                head = grid.get_tile_instance_offset(x, y, -direction.next.dx, -direction.next.dy)
+                grid.clauses.append([-r, tile.is_splitter_head, -tile.input_direction[direction],
+                                     *([] if head is None else [head.node[i] for i in indices])])
+
+
+def apply_settings(solution, network, settings, filter_item=None):
+    """Write priorities and filters into a solved grid (cells as from Grid.solve / itersolve), in place.
+
+    settings: {node key: {'in': X, 'out': Y, 'filter': item}} (network.network_settings). The side is read from the
+    solution's colours: input priority goes on the half whose input has colour X, output priority on the half whose
+    front tile has colour Y, and a filter (with output priority, as the game needs) on the half that outputs nothing.
+    filter_item: also filter every other splitter with a dangling output that has something in front of it
+    (--filter-dangling). Returns the number of splitters set."""
+    keys = list(network.keys())
+    height, width = solution.shape
+    count = 0
+    for y in range(height):
+        for x in range(width):
+            cell = solution[y, x]
+            if not cell['is_splitter'] or not cell['is_splitter_head']:
+                continue
+            key = keys[cell['node']]
+            entry = dict(settings.get(key) or {})
+            head = Splitter.read(cell['tile'])
+            d = head.direction
+            halves = {'right': (x, y), 'left': (x + d.next.dx, y + d.next.dy)}
+            fronts = {side: (hx + d.dx, hy + d.dy) for side, (hx, hy) in halves.items()}
+
+            def colour_at(pos):
+                px, py = pos
+                return solution[py, px]['colour'] if 0 <= px < width and 0 <= py < height else None
+
+            outless = [side for side, (hx, hy) in halves.items() if solution[hy, hx]['output_direction'] is None]
+            if filter_item is not None and 'filter' not in entry and len(outless) == 1:
+                fx, fy = fronts[outless[0]]
+                if 0 <= fx < width and 0 <= fy < height and not solution[fy, fx]['is_empty']:
+                    entry['filter'] = filter_item
+            if not entry:
+                continue
+            values = {}
+            if 'in' in entry:
+                values['input_priority'] = next(side for side, pos in halves.items() if colour_at(pos) == entry['in'])
+            if 'out' in entry:
+                values['output_priority'] = next(side for side, pos in fronts.items() if colour_at(pos) == entry['out'])
+            if 'filter' in entry:
+                assert len(outless) == 1, (x, y, entry)
+                values['output_priority'] = outless[0]
+                values['filter'] = entry['filter']
+            for hx, hy in halves.values():
+                tile = solution[hy, hx]['tile']
+                solution[hy, hx] = {**solution[hy, hx], 'tile': {**tile, **values}}
+            count += 1
+    return count
 
 
 def enforce_edge_splitters(grid: Grid, network):
@@ -314,6 +405,8 @@ def main():
     parser.add_argument('--break-symmetry', action='store_true',
                         help='Prevents vertical reflections being considered, sometimes unsound when applied with --prevent-bad-patterns')
     parser.add_argument('--use-ends', action='store_true', help='Allow ends to have non-empty tiles, asside from input/output belts')
+    parser.add_argument('--free-ends', action='store_true',
+                        help='With --use-ends, the input end\'s other tiles may also be empty or splitters (not only belts)')
     parser.add_argument('--fast', action='store_true', help='Enables all speed improving options')
     parser.add_argument('--aligned', action='store_true', help='Enforces balancer input aligns with output')
     parser.add_argument('--underground-length', type=int, default=4, help='Sets the maximum length of underground section (excludes ends)')
@@ -326,6 +419,10 @@ def main():
     parser.add_argument('--all', action='store_true', help='Generate all belt balancers')
     parser.add_argument('--solver', type=str, default='Glucose3', help='Backend SAT solver to use')
     parser.add_argument('--partial', type=argparse.FileType('r'), help='Partial balancer to base solution from')
+    parser.add_argument('--filter-dangling', action='store_true',
+                        help='Every splitter with a dangling output may have something in front of it there; the '
+                        'output gets a filter (deconstruction planner) where it does. Network lines marked '
+                        '`filter` get this individually')
 
     args = parser.parse_args()
 
@@ -345,9 +442,13 @@ def main():
     args.network.close()
 
     network = deduplicate_network(network)
+    settings = getattr(network, 'settings', None) or {}
+    filtered = {key for key, entry in settings.items() if 'filter' in entry}
+    if args.filter_dangling:
+        filtered |= {key for key in network if None in key[1]}
 
     tiers = args.tiers.split(',') if args.tiers else None
-    grid = create_balancer(network, args.width, args.height, args.underground_length, tiers)
+    grid = create_balancer(network, args.width, args.height, args.underground_length, tiers, filtered)
     for cap in args.tier_max:
         name, k = cap.split('=')
         grid.limit_tier(name, int(k))
@@ -388,9 +489,11 @@ def main():
     elif args.custom:
         pass
     else:
-        setup_balancer_ends(grid, network, args.aligned, args.use_ends)
+        setup_balancer_ends(grid, network, args.aligned, args.use_ends, args.free_ends)
 
     for solution in grid.itersolve(solver=args.solver, ignore_colour=True):
+        if args.filter_dangling:  # (the network's own settings are already in: Grid.solution_hook)
+            apply_settings(solution, network, {}, DEFAULT_FILTER)
         print(json.dumps(solution.tolist()))
         if not args.all:
             break

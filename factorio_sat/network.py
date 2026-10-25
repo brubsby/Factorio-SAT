@@ -3,6 +3,7 @@ import collections
 import copy
 import json
 import math
+import sys
 from os import path
 from typing import Tuple
 
@@ -16,7 +17,7 @@ from . import blueprint
 try:
     from graphviz import Digraph
 except ModuleNotFoundError:
-    print('"graphviz" not installed: network rendering will not work')
+    print('"graphviz" not installed: network rendering will not work', file=sys.stderr)
 
 
 def create_benes_network(size):
@@ -329,7 +330,67 @@ def calculate_network_size(network):
     return len(input_colours - output_colours), len(output_colours - input_colours)
 
 
-def open_network(file):
+DEFAULT_FILTER = 'deconstruction-planner'
+
+
+def parse_settings(tokens, node):
+    """Per-splitter annotations after the four colours of a network line (all optional, any order):
+        in=X      input priority on the input of colour X (the game's input_priority, on the side X enters)
+        out=Y     output priority on the output of colour Y (filled first, the rest overflows to the other)
+        filter    the dangling output (-1) is blocked by a filter (filter=ITEM names the item; default
+                  deconstruction-planner, which never rides a belt), so the layout may put a belt, underground
+                  end or splitter in front of it: the game's output_priority goes on that side
+    Returns None for a plain (fair) splitter."""
+    if not tokens:
+        return None
+    settings = {}
+    for token in tokens:
+        key, _, value = token.partition('=')
+        if key in ('in', 'out'):
+            settings[key] = int(value)
+        elif key == 'filter':
+            settings['filter'] = value or DEFAULT_FILTER
+        else:
+            raise ValueError(f'Unknown splitter setting {token!r}')
+    check_settings(node, settings)
+    return settings
+
+
+def check_settings(node, settings):
+    """A prioritised colour must differ from the other colour on its side, or the side would be ambiguous."""
+    if not settings:
+        return
+    inputs, outputs = node
+    for key, side in (('in', inputs), ('out', outputs)):
+        if key in settings:
+            colour = settings[key]
+            if colour not in side or None in side or side[0] == side[1]:
+                raise ValueError(f'{key}={colour} on {node}: needs two distinct colours on that side, one of them {colour}')
+    if 'filter' in settings:
+        if sum(colour is None for colour in outputs) != 1:
+            raise ValueError(f'filter on {node}: needs exactly one dangling (-1) output')
+        if 'out' in settings:
+            raise ValueError(f'filter on {node}: a filtered splitter has one output, so no output priority')
+
+
+def format_settings(settings):
+    if not settings:
+        return ''
+    tokens = []
+    if 'in' in settings:
+        tokens.append(f'in={settings["in"]}')
+    if 'out' in settings:
+        tokens.append(f'out={settings["out"]}')
+    if 'filter' in settings:
+        tokens.append('filter' if settings['filter'] == DEFAULT_FILTER else f'filter={settings["filter"]}')
+    return ' ' + ' '.join(tokens)
+
+
+def open_network(file, with_settings=False):
+    """with_settings: also return the per-splitter settings (a list parallel to the network, None = fair).
+    Without it the result is the plain network (a list of nodes); if the file has settings, that list is a
+    SetNetwork carrying them, so deduplicate_network / create_balancer / the solution keep them without the caller
+    knowing (e.g. tools that build the instance themselves). A file without settings reads exactly as before."""
     require_close = False
     if isinstance(file, str):
         require_close = True
@@ -337,6 +398,7 @@ def open_network(file):
 
     try:
         network = []
+        settings = []
         for line in file.readlines():
             line = line.strip()
             if len(line) == 0:
@@ -345,32 +407,77 @@ def open_network(file):
             if line.startswith('#'):
                 continue
 
-            colours = [int(colour) for colour in line.split()]
+            tokens = line.split()
+            if len(tokens) < 4:
+                raise ValueError('Invalid file')
+            colours = [int(colour) for colour in tokens[:4]]
 
             for i, colour in enumerate(colours):
                 if colour == -1:
                     colours[i] = None
 
-            if len(colours) != 4:
-                raise ValueError('Invalid file')
-            network.append((tuple(colours[:2]), tuple(colours[2:])))
+            node = (tuple(colours[:2]), tuple(colours[2:]))
+            network.append(node)
+            settings.append(parse_settings(tokens[4:], node))
     finally:
         if require_close:
             file.close()
+    if with_settings:
+        return network, settings
+    if has_settings(settings):
+        # Callers that only know the plain format still carry the settings along (deduplicate_network keeps them)
+        network = SetNetwork(network)
+        network.settings = settings
     return network
 
 
-def save_network(file, network):
+def save_network(file, network, settings=None):
     if isinstance(file, str):
         file = open(file, 'w')
 
-    for input_colours, output_colours in network:
+    for i, (input_colours, output_colours) in enumerate(network):
         all_colours = list(input_colours + output_colours)
-        for i, colour in enumerate(all_colours):
+        for j, colour in enumerate(all_colours):
             if colour is None:
-                all_colours[i] = -1
+                all_colours[j] = -1
 
-        file.write(' '.join(map(str, all_colours)) + '\n')
+        file.write(' '.join(map(str, all_colours)) + (format_settings(settings[i]) if settings else '') + '\n')
+
+
+def remap_settings(settings, colour_map):
+    result = []
+    for entry in settings:
+        if entry:
+            entry = dict(entry)
+            for key in ('in', 'out'):
+                if key in entry:
+                    entry[key] = colour_map.get(entry[key], entry[key])
+        result.append(entry)
+    return result
+
+
+def node_key(node):
+    def key(colour):
+        return -math.inf if colour is None else colour
+    inputs, outputs = node
+    return tuple(sorted(inputs, key=key)), tuple(sorted(outputs, key=key))
+
+
+def network_settings(network, settings):
+    """Settings by deduplicated node (the keys of deduplicate_network). Identical splitters are one node type
+    in the layout encoding, so they must agree; give a prioritised splitter its own colours otherwise."""
+    result = {}
+    for node, entry in zip(network, settings or [None] * len(network)):
+        k = node_key(node)
+        check_settings(node, entry)
+        if k in result and result[k] != entry:
+            raise ValueError(f'Splitters {k} have different settings ({result[k]} vs {entry}): give them distinct colours')
+        result[k] = entry
+    return {k: v for k, v in result.items() if v}
+
+
+def has_settings(settings):
+    return any(settings or [])
 
 
 def flip_network(network):
@@ -501,7 +608,11 @@ def optimise_colours(network, solver='g3'):
         return result_network
 
 
-def parse_network(tiles, assume_edge_splitter_are_connected=False):
+def parse_network(tiles, assume_edge_splitter_are_connected=False, with_settings=False):
+    """with_settings: also read the splitters' priorities and filters (see parse_settings) and return
+    (network, settings). A filter blocks its output_priority side (that output becomes -1). The two outputs of an
+    output-priority splitter get distinct colours (they carry different flows), and so do the two outputs of a
+    splitter that feeds both inputs of an input-priority splitter."""
     tiles = tiles.T
 
     colour_mapping = np.full_like(tiles, None)
@@ -549,7 +660,7 @@ def parse_network(tiles, assume_edge_splitter_are_connected=False):
                     dx, dy = tile.direction.vec
                     while True:
                         pos = pos[0] - dx, pos[1] - dy
-                        assert pos[0] >= 0 and pos[0] < tiles.shape[0] and pos[1] >= 1 and pos[1] < tiles.shape[1]
+                        assert pos[0] >= 0 and pos[0] < tiles.shape[0] and pos[1] >= 0 and pos[1] < tiles.shape[1]
 
                         current_tile = tiles[pos]
                         assert current_tile != UndergroundBelt(tile.direction, False)
@@ -600,16 +711,24 @@ def parse_network(tiles, assume_edge_splitter_are_connected=False):
                 trace(colour, next_tile((x, y), False), False)
 
     network = []
+    sides = []  # per splitter: (input priority index, output priority index), index 0 = right half, 1 = left
     for x, y in splitters:
         tile = tiles[x, y]
         assert isinstance(tile, Splitter) and tile.is_head
         dx0, dy0 = tile.direction.vec
         dx1, dy1 = tile.direction.next.vec
+        side_index = {'right': 0, 'left': 1, None: None}
+        blocked = side_index[tile.output_priority] if tile.filter is not None else None
+        sides.append((side_index[tile.input_priority], None if tile.filter is not None else side_index[tile.output_priority],
+                      tile.filter))
 
         node = []
         for is_output, offset_a in enumerate([(-dx0, -dy0), (+dx0, +dy0)]):
             node.append([])
-            for offset_b in [(0, 0), (dx1, dy1)]:
+            for side, offset_b in enumerate([(0, 0), (dx1, dy1)]):
+                if is_output and side == blocked:
+                    node[-1].append(None)
+                    continue
                 pos = x + offset_a[0] + offset_b[0], y + offset_a[1] + offset_b[1]
                 if pos[0] < 0 or pos[0] >= tiles.shape[0] or pos[1] < 0 or pos[1] >= tiles.shape[1]:
                     if assume_edge_splitter_are_connected:
@@ -620,12 +739,14 @@ def parse_network(tiles, assume_edge_splitter_are_connected=False):
                     continue
 
                 offset_tile = tiles[pos]
-                if offset_tile is None:
+                if offset_tile is None or isinstance(offset_tile, (EmptyTile, FillerTile)):
                     node[-1].append(None)
                     continue
 
                 if isinstance(offset_tile, Splitter):
-                    if offset_tile.direction == tile.direction:
+                    if not is_output and offset_tile.filter is not None and offset_tile.output_priority == offset_tile.side:
+                        colour = None  # behind us is the blocked half of a filtered splitter
+                    elif offset_tile.direction == tile.direction:
                         if is_output:
                             colour_pos = pos
                         else:
@@ -648,32 +769,85 @@ def parse_network(tiles, assume_edge_splitter_are_connected=False):
         network.append(tuple(node))
 
     network_input_colours, network_output_colours = get_exterior_colours(network)
+
+    # Output pairs that must keep distinct colours (only with settings, so plain parses are unchanged)
+    split = set()
+    if with_settings:
+        producer = {colour: j for j, (_, outputs) in enumerate(network) for colour in outputs if colour is not None}
+        for j, (inputs, _) in enumerate(network):
+            if sides[j][1] is not None:
+                split.add(j)
+            if sides[j][0] is not None and None not in inputs:
+                a, b = (producer.get(colour) for colour in inputs)
+                if a is not None and a == b:
+                    split.add(a)
+
     mapping = {}
     for colour in network_input_colours:
         mapping[colour] = 0
     current_colour = 1
-    for _, output_colours in network:
+    for j, (_, output_colours) in enumerate(network):
         for colour in output_colours:
             mapping[colour] = current_colour
-        current_colour += 1
+            if j in split and colour is not None:
+                current_colour += 1
+        if j not in split:
+            current_colour += 1
     for colour in network_output_colours:
         mapping[colour] = current_colour
 
     mapping.pop(None, None)
     network = remap_colours(network, mapping)
 
-    return network
+    if not with_settings:
+        return network
+
+    settings = []
+    for (inputs, outputs), (in_side, out_side, item) in zip(network, sides):
+        entry = {}
+        if in_side is not None and None not in inputs:  # input priority on a one-input splitter does nothing
+            entry['in'] = inputs[in_side]
+        if out_side is not None and None not in outputs:
+            entry['out'] = outputs[out_side]
+        if item is not None and None in outputs:
+            entry['filter'] = item
+        check_settings((inputs, outputs), entry)
+        settings.append(entry or None)
+    return network, settings
+
+
+class SetNetwork(list):
+    """A network (list of nodes) that remembers its per-splitter settings (open_network). Plain list otherwise."""
+    settings = None
+
+
+class SetCounter(collections.Counter):
+    """deduplicate_network of a SetNetwork: the Counter of node types plus `settings` ({node key: entry}), which
+    belt_balancer.create_balancer picks up (filters in the encoding, priorities written into each solution)."""
+    settings = None
 
 
 def deduplicate_network(network):
-    def key(colour):
-        return -math.inf if colour is None else colour
-    network = [(tuple(sorted(inputs, key=key)), tuple(sorted(outputs, key=key))) for inputs, outputs in network]
-    return collections.Counter(network)
+    counter = collections.Counter(node_key(node) for node in network)
+    settings = getattr(network, 'settings', None)
+    if settings and has_settings(settings):
+        counter = SetCounter(counter)
+        counter.settings = network_settings(network, settings)
+    return counter
 
 
-def tidy_network(network):
-    network = fix_colours(network)
+def tidy_network(network, settings=None):
+    """settings: optional per-splitter settings, remapped and reordered with the network; then (network, settings)
+    is returned."""
+    fixed = fix_colours(network)
+    if settings is not None:
+        colour_map = {}
+        for old_node, new_node in zip(network, fixed):
+            for old_side, new_side in zip(old_node, new_node):
+                for old, new in zip(old_side, new_side):
+                    colour_map[old] = new
+        settings = remap_settings(settings, colour_map)
+    network = fixed
 
     input_colours, output_colours = get_exterior_colours(network)
 
@@ -683,10 +857,14 @@ def tidy_network(network):
     for i, node in enumerate(network):
         network[i] = tuple(tuple(sorted(side, key=none_key)) for side in node)
 
-    network.sort(key=lambda node: none_key(node[0][0]))
-    network.sort(key=lambda node: sum(colour in output_colours for colour in node[1]) - sum(colour in input_colours for colour in node[0]))
+    order = list(range(len(network)))
+    order.sort(key=lambda i: none_key(network[i][0][0]))
+    order.sort(key=lambda i: sum(colour in output_colours for colour in network[i][1]) - sum(colour in input_colours for colour in network[i][0]))
+    network = [network[i] for i in order]
 
-    return network
+    if settings is None:
+        return network
+    return network, [settings[i] for i in order]
 
 
 def main():
@@ -735,11 +913,11 @@ def main():
             for j, item in enumerate(row):
                 tiles[i, j] = blueprint.read_tile(item)
 
-        network = parse_network(tiles, args.assume_valid_output)
-        network = tidy_network(network)
+        network, settings = parse_network(tiles, args.assume_valid_output, with_settings=True)
+        network, settings = tidy_network(network, settings)
 
         with args.output:
-            save_network(args.output, network)
+            save_network(args.output, network, settings)
     else:
         with args.input_network:
             in_network = open_network(args.input_network)
