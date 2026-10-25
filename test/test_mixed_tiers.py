@@ -104,6 +104,19 @@ class TestMixedTiers(unittest.TestCase):
                                                                     level=blueprint.TransportBeltLevel.FAST))
         self.assertEqual(plain[0, 3], UndergroundBelt(R, True))
 
+    def test_blueprint_2x_directions(self):
+        # Factorio 2.x blueprints use 16-way directions (east = 4, south = 8)
+        tiles = np.empty((2, 8), dtype=object)
+        tiles[:] = interleaved('normal', 'fast')
+        bp = blueprint.make_blueprint(tiles)
+        bp['blueprint']['version'] = blueprint.encode_factorio_version(2, 0, 0, 0)
+        for e in bp['blueprint']['entities']:
+            if 'direction' in e:
+                e['direction'] *= 2
+        back = blueprint.import_blueprint(bp)
+        self.assertEqual(back[0, 3], UndergroundBelt(R, True, 'fast'))
+        self.assertEqual(back[0, 5].output_direction, D)
+
 
 if __name__ == '__main__':
     unittest.main()

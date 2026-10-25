@@ -132,6 +132,9 @@ def resolve_belt_input_directions(tiles):
             if neighbour.output_direction != direction:
                 continue
 
+            if direction == tile.output_direction.reverse:  # head-on: a belt cannot be fed from its front
+                continue
+
             if input_direction is None:
                 input_direction = direction
             else:
@@ -156,11 +159,13 @@ def import_blueprint(data: Any, keep_tiers: Optional[bool] = None):
         keep_tiers = len(underground_tiers) > 1
 
     entities = {}
+    # Factorio 2.x blueprints use 16-way directions (east = 4); 1.x uses 8-way (east = 2)
+    direction_scale = 2 if (data['blueprint'].get('version', 0) >> 48) >= 2 else 1
 
     for entity in data['blueprint']['entities']:
         pos = entity['position']['x'], entity['position']['y']
         name = entity['name']
-        direction = Direction.from_factorio(entity.get('direction', 0))
+        direction = Direction.from_factorio(entity.get('direction', 0) // direction_scale)
 
         floor_pos = math.floor(pos[0]), math.floor(pos[1])
 
