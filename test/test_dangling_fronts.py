@@ -14,11 +14,12 @@ from factorio_sat.network import deduplicate_network, open_network
 HERE = os.path.join(os.path.dirname(__file__), 'regression')
 
 
-def pinned(net, bp_file, underground_length=4, forbid=True):
+def pinned(net, bp_file, underground_length=4, forbid=True, mode='empty'):
     network = deduplicate_network(open_network(os.path.join(HERE, net)))
     bp = open(os.path.join(HERE, bp_file)).read().strip()
     height, width = blueprint.convert_to_tiles(bp).shape
     grid = belt_balancer.create_balancer(network, width, height, underground_length)
+    grid.dangling_front_mode = mode
     grid.prevent_intersection(forbid_dangling_fronts=forbid)
     belt_balancer.setup_balancer_ends(grid, network, False, False)
     grid.enforce_maximum_underground_length()
@@ -35,6 +36,12 @@ class TestDanglingFronts(unittest.TestCase):
 
     def test_clean_layout_still_accepted(self):
         self.assertIsNotNone(pinned('net_1x3_cbal_k5_11', 'ok_1x3_w3_l12.txt').solve())
+
+    def test_contact_mode_rejects_contact(self):
+        self.assertIsNone(pinned('net_1x3_cbal_k5_11', 'contact_1x3_w4_l8.txt', mode='contact').solve())
+
+    def test_contact_mode_keeps_clean_layout(self):
+        self.assertIsNotNone(pinned('net_1x3_cbal_k5_11', 'ok_1x3_w3_l12.txt', mode='contact').solve())
 
     def test_idempotent(self):
         network = deduplicate_network(open_network(os.path.join(HERE, 'net_1x3_cbal_k5_11')))

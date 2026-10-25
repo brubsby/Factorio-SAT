@@ -70,6 +70,9 @@ class Grid(FactorioGrid[TileTemplate, Dict[str, Any]]):
         self.solution_hook: Optional[Callable[[Any], Any]] = None
         # Set once forbid_dangling_fronts() has added its clauses (prevent_intersection calls it by default)
         self.dangling_fronts_forbidden = False
+        # 'empty' (default): nothing at all in front of a dangling splitter output. 'contact': only what the game
+        # feeds from there is excluded (see forbid_dangling_fronts); set it before prevent_intersection.
+        self.dangling_front_mode = 'empty'
 
         template = {
             'is_belt': BoolTemplate(),
@@ -637,19 +640,33 @@ class Grid(FactorioGrid[TileTemplate, Dict[str, Any]]):
         rule for downsizers. A used output is unaffected (its front must accept from behind anyway), and nothing is
         required at the grid edge. Idempotent; prevent_intersection() calls it unless told not to.
 
+        dangling_front_mode = 'contact' is the exact form: it excludes only the face-to-face contact (a same-direction
+        splitter half with no input in front), the one case the encoder missed after bdd1e76. 'empty' (default) is
+        conservative and also excludes harmless fronts, so some valid layouts are lost.
+
         A tile with a front_relax literal (the outputless half of a filtered splitter, or of a merger whose output
         priority points at its used side: belt_balancer.allow_filtered_fronts) is exempt when that literal is true.
         Call it after create_balancer has set those literals; prevent_intersection does."""
         if self.dangling_fronts_forbidden:
             return
         self.dangling_fronts_forbidden = True
+        assert self.dangling_front_mode in ('empty', 'contact'), self.dangling_front_mode
         for direction in Direction:
             for tile_a, tile_b in self.iterate_tile_lines(direction.vec, 2):
                 if tile_b is None:
                     continue
                 relax = self.front_relax.get(tile_a.is_splitter)
-                self.clauses.append([-tile_a.is_splitter, -tile_a.input_direction[direction],
-                                     tile_a.output_direction[direction], tile_b.is_empty, *([] if relax is None else [relax])])
+                dangling = [-tile_a.is_splitter, -tile_a.input_direction[direction], tile_a.output_direction[direction],
+                            *([] if relax is None else [relax])]
+                if self.dangling_front_mode == 'empty':
+                    self.clauses.append(dangling + [tile_b.is_empty])
+                else:
+                    # 'contact': only a splitter half facing the same way and taking no input (its output is set, its
+                    # input is not) is fed from the dangling output. Crosswise belts and underground ends are already
+                    # excluded by prevent_intersection; a head-on or crosswise splitter, the back of an underground
+                    # exit and the front of an entrance accept nothing in the game (upstream's "Splitter output
+                    # cases"; exhaustive game sweeps of such layouts pass).
+                    self.clauses.append(dangling + [-tile_b.is_splitter, -tile_b.output_direction[direction]])
 
     def itersolve(self, important_variables=set(), solver='g3', ignore_colour=False):
         important_variables = set(important_variables)
