@@ -62,6 +62,8 @@ class Grid(FactorioGrid[TileTemplate, Dict[str, Any]]):
         self.multi_tier = self.tier_count > 1
         self.colours = colours
         self.underground_length = underground_length
+        # Set once forbid_dangling_fronts() has added its clauses (prevent_intersection calls it by default)
+        self.dangling_fronts_forbidden = False
 
         template = {
             'is_belt': BoolTemplate(),
@@ -570,7 +572,11 @@ class Grid(FactorioGrid[TileTemplate, Dict[str, Any]]):
                         else:
                             self.clauses.append(clause)
 
-    def prevent_intersection(self):
+    def prevent_intersection(self, forbid_dangling_fronts: bool = True):
+        """forbid_dangling_fronts (default): also forbid_dangling_fronts(). Pass False only to rebuild a CNF from
+        before that rule (fork commits up to 31de97c); such layouts can leak in the game."""
+        if forbid_dangling_fronts:
+            self.forbid_dangling_fronts()
         for direction in Direction:
             for tile_a, tile_b in self.iterate_tile_lines(direction.vec, 2):
                 if tile_b is None:
@@ -602,6 +608,27 @@ class Grid(FactorioGrid[TileTemplate, Dict[str, Any]]):
                         [-tile_b.is_underground_out, -tile_b.output_direction[direction.next]],
                         [-tile_b.is_underground_out, -tile_b.output_direction[direction.prev]],
                     ])
+
+    def forbid_dangling_fronts(self):
+        """The tile in front of a splitter half that takes input but outputs nothing (a dangling output port of the
+        network) must be empty; undergrounds may still pass beneath it.
+
+        In the game a splitter outputs into whatever stands in front of it, whatever the network says: a belt or
+        underground end facing across (a sideload), or the input half of another splitter that the network leaves
+        unused (two splitters face to face). The built balancer then has an arc the network lacks. That broke a
+        1-3 balancer (W4 L8: 1/4, 1/4, 1/2 in game) and 1-17 TU layouts (2->2 splitters where the network had 2->1
+        loop mergers). The tile model has no sideloading, so the only sound rule is an empty front: Raynquist's
+        rule for downsizers. A used output is unaffected (its front must accept from behind anyway), and nothing is
+        required at the grid edge. Idempotent; prevent_intersection() calls it unless told not to."""
+        if self.dangling_fronts_forbidden:
+            return
+        self.dangling_fronts_forbidden = True
+        for direction in Direction:
+            for tile_a, tile_b in self.iterate_tile_lines(direction.vec, 2):
+                if tile_b is None:
+                    continue
+                self.clauses.append([-tile_a.is_splitter, -tile_a.input_direction[direction],
+                                     tile_a.output_direction[direction], tile_b.is_empty])
 
     def itersolve(self, important_variables=set(), solver='g3', ignore_colour=False):
         important_variables = set(important_variables)
