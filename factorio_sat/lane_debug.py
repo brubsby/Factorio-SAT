@@ -13,10 +13,10 @@ from .rotate import Operation
 from .tile import EmptyTile, TransformableTile
 
 
-def pinned(nodes, tiles, stage):
+def pinned(nodes, tiles, stage, merges=(), rest_empty=True):
     h, w = tiles.shape
-    n, m = lane_counts(nodes)
-    grid = create_lane_balancer(nodes, w, h)
+    n, m = lane_counts(nodes, merges)
+    grid = create_lane_balancer(nodes, w, h, merges=merges)
     if stage >= 1:
         grid.prevent_intersection()
     if stage >= 2:
@@ -24,8 +24,8 @@ def pinned(nodes, tiles, stage):
     if stage >= 3:
         start = [grid.get_tile_instance(0, y) for y in range(h)]
         end = [grid.get_tile_instance(w - 1, y) for y in range(h)]
-        setup_balancer_input(grid, start, 0, n, True)
-        setup_balancer_output(grid, end, 0, m, True)
+        setup_balancer_input(grid, start, 0, n, rest_empty, rest_belts=False)
+        setup_balancer_output(grid, end, 0, m, rest_empty)
     for (y, x), t in np.ndenumerate(tiles):
         grid.set_tile(x, y, t)
     return grid
@@ -36,15 +36,16 @@ def main():
     ap.add_argument('network')
     ap.add_argument('bp')
     ap.add_argument('--rot', type=int, default=0)
+    ap.add_argument('--use-ends', action='store_true')
     a = ap.parse_args()
-    nodes = open_lane_network(a.network)
+    nodes, merges = open_lane_network(a.network, with_merges=True)
     tiles = convert_to_tiles(open(a.bp).read().strip())
     op = [Operation.NO_OP, Operation.ROT_90, Operation.ROT_180, Operation.ROT_270][a.rot % 4]
     tiles = op.grid(tiles)
     tiles = np.vectorize(lambda t: op.tile(t) if isinstance(t, TransformableTile) else t, otypes=[object])(tiles)
     print(tiles.shape)
     for stage in range(4):
-        grid = pinned(nodes, tiles, stage)
+        grid = pinned(nodes, tiles, stage, merges, not a.use_ends)
         sol = next(iter(grid.itersolve(ignore_colour=True)), None)
         print('stage', stage, 'SAT' if sol is not None else 'UNSAT')
 
