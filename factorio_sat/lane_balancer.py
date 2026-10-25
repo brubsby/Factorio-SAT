@@ -97,7 +97,25 @@ class LaneGrid(Grid):
             'mR': BoolTemplate(),
         })
         super().__init__(width, height, colours, underground_length, ex)
+        self.relax_edge_inputs()
         self.side_feed_rules()
+
+    def relax_edge_inputs(self):
+        """Grid makes every edge tile whose input points inward an input port (input_direction -> is_input). A side-fed
+        entrance at the edge (no_behind) faces inward without being fed through the edge: weaken those clauses to
+        input_direction -> is_input or no_behind (Raynquist's 1-1 TU lane corner balancer has one)."""
+        edge = {}
+        for x in range(self.width):
+            for y in range(self.height):
+                t = self.get_tile_instance(x, y)
+                for d in Direction:
+                    edge[(-t.input_direction[d], t.is_input)] = t.no_behind
+        out = []
+        for c in self.clauses:
+            if len(c) == 2 and (c[0], c[1]) in edge:
+                c = c + [edge[(c[0], c[1])]]
+            out.append(c)
+        self.clauses[:] = out
 
     def colour_ranges(self, tile):
         return [tile.colour, tile.colour_ux, tile.colour_uy, tile.colour_r, tile.colour_r_ux, tile.colour_r_uy,
@@ -430,6 +448,7 @@ def main():
                     'splitters or nothing), as long as nothing else enters or leaves through the edge')
     ap.add_argument('--blueprint', action='store_true', help='print blueprint strings instead of tile JSON')
     ap.add_argument('--level', default='express')
+    ap.add_argument('--90', dest='turn_90', action='store_true', help='corner: outputs leave through the bottom edge')
     ap.add_argument('--in-offset', type=int, help='first input at this row of the input edge')
     ap.add_argument('--out-offset', type=int, help='first output at this row of the output edge')
     a = ap.parse_args()
@@ -439,9 +458,12 @@ def main():
     grid.prevent_intersection()
     grid.enforce_maximum_underground_length()
     start = [grid.get_tile_instance(0, y) for y in range(grid.height)]
-    end = [grid.get_tile_instance(grid.width - 1, y) for y in range(grid.height)]
+    if a.turn_90:
+        end = [grid.get_tile_instance(x, grid.height - 1) for x in range(grid.width)]
+    else:
+        end = [grid.get_tile_instance(grid.width - 1, y) for y in range(grid.height)]
     ino = setup_balancer_input(grid, start, 0, n, not a.use_ends, rest_belts=False)
-    outo = setup_balancer_output(grid, end, 0, m, not a.use_ends)
+    outo = setup_balancer_output(grid, end, 3 if a.turn_90 else 0, m, not a.use_ends)
     if a.in_offset is not None and ino:
         grid.clauses.append([ino[a.in_offset]])
     if a.out_offset is not None and outo:
