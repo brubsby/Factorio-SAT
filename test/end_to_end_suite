@@ -87,7 +87,7 @@
 │↑ ↑    │
 └───────┘
 }
-[3-2 Rotations Layout]+ {
+[3-2 Rotations Layout](dangling-fronts=allow)+ {
 ┌───────────────┐
 │← a ← ← ← ← a ←│
 │← A a ← a ← A ←│
@@ -121,7 +121,7 @@
 │↓ ↓    │
 └───────┘
 }
-[3-2 Rotations](network=networks/3x2)+ {
+[3-2 Rotations](network=networks/3x2, dangling-fronts=allow)+ {
 ┌───────────────┐
 │← a ← ← ← ← a ←│
 │← A a ← a ← A ←│
@@ -355,12 +355,34 @@
     }
 }
 
-[Splitter output cases] {
+[Splitter output cases](dangling-fronts=allow) {
     [Valid]+ {
         ┌─────┐
         │→ D →│
         │→ d →│
         └─────┘
+        ┌───────┐
+        │→ D → f│
+        │→ d s S│
+        │    ↓ ↓│
+        └───────┘
+        ┌───────┐
+        │    ↑ ↑│
+        │→ D W w│
+        │→ d → h│
+        └───────┘
+        ┌───────┐
+        │← ← a ←│
+        │→ D A ←│
+        │→ d → →│
+        └───────┘
+        ┌───────┐
+        │  ↓    │
+        │l T D L│
+        │→ → d →│
+        └───────┘
+    }
+    [Dangling output fronts](dangling-fronts=forbid)- {
         ┌─────┐
         │    I│
         │→ D →│
