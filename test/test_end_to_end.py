@@ -90,7 +90,9 @@ class TestCase(unittest.TestCase):
 
         grid.enforce_maximum_underground_length()
 
-        grid.prevent_intersection()
+        # dangling-fronts=allow: the tile model alone, without Grid.forbid_dangling_fronts (cases that are valid tilings
+        # but put something in front of a splitter half that outputs nothing; the default rule forbids them)
+        grid.prevent_intersection(forbid_dangling_fronts=self.params.get('dangling-fronts', 'forbid') != 'allow')
         if edges == 'block':
             grid.block_belts_through_edges()
             grid.block_underground_through_edges()
