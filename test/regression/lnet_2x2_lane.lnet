@@ -1,0 +1,5 @@
+# lane network of 2 to x/2-2 lane balancer (tools/lanes/to_lnet.py)
+# aL bL cL dL  aR bR cR dR
+4 9 3 3 6 8 3 3
+2 2 4 5 2 2 6 7
+5 -1 -1 8 7 -1 9 -1
