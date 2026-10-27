@@ -90,7 +90,12 @@ def setup_balancer_output(grid: Grid, tiles: Sequence[TileTemplate], direction: 
 
 
 def setup_balancer_ends(grid: Grid, network, aligned: bool, use_ends: bool, free_ends: bool = False):
-    """free_ends (with use_ends): the input column's other tiles may also be empty or splitters, not only belts."""
+    """use_ends=False: closed edges (every non-port tile of the input and output columns empty), Factorio-SAT's
+    original rule. use_ends=True: open edges (nothing enters or leaves through the edge but the ports; the Grid's
+    is_input / is_output counts keep any other edge tile from leaking). free_ends (with use_ends): the input column's
+    other tiles may also be empty or splitters, not only belts. With open edges a port tile may curve into the column;
+    in the game a curve fed from off the grid is a different port map, so callers that need straight ports add that
+    rule (factorio-balancer-sat tools/gensat/edges.py straight_io)."""
     (_, input_count), (_, output_count) = get_input_output_colours(network.elements())
 
     start_tiles = [grid.get_tile_instance(0, y) for y in range(grid.height)]
@@ -108,12 +113,15 @@ def setup_balancer_ends(grid: Grid, network, aligned: bool, use_ends: bool, free
                 grid.clauses += implies([end_offset], [start_offsets[i:(i + 1 + output_count - input_count)]])
 
 
-def setup_balancer_ends_90(grid: Grid, network, use_ends: bool):
+def setup_balancer_ends_90(grid: Grid, network, use_ends: bool, free_ends: bool = False):
+    """Inputs enter column 0 heading east, outputs leave the bottom row heading south. use_ends / free_ends as in
+    setup_balancer_ends (free_ends was missing here: with use_ends alone the input column's other tiles had to be
+    belts)."""
     (_, input_count), (_, output_count) = get_input_output_colours(network.elements())
 
     start_tiles = [grid.get_tile_instance(0, y) for y in range(grid.height)]
     end_tiles = [grid.get_tile_instance(x, grid.height - 1) for x in range(grid.width)]
-    setup_balancer_input(grid, start_tiles, 0, input_count, not use_ends)
+    setup_balancer_input(grid, start_tiles, 0, input_count, not use_ends, not free_ends)
     setup_balancer_output(grid, end_tiles, 3, output_count, not use_ends)
 
 
@@ -504,7 +512,7 @@ def main():
             set_nonempty_tiles(grid, args.partial.read())
 
     if args.turn_90:
-        setup_balancer_ends_90(grid, network, args.use_ends)
+        setup_balancer_ends_90(grid, network, args.use_ends, args.free_ends)
     elif args.turn_180:
         setup_balancer_ends_180(grid, network)
     elif args.custom:
