@@ -48,14 +48,14 @@ def setup_balancer_input(grid: Grid, tiles: Sequence[TileTemplate], direction: i
 
     if len(offsets) == 0:
         for tile in tiles:
-            grid.clauses += [[tile.input_direction[direction]]]
+            grid.clauses += [[tile.input_direction[direction]], [tile.output_direction[direction]], [tile.is_belt]]  # straight input
     else:
         grid.clauses += quadratic_one(offsets)
         for di, literal in enumerate(offsets):
             consequences = []
             for i, tile in enumerate(tiles):
                 if i in range(di, di + count):
-                    consequences += [[tile.input_direction[direction]], [tile.is_belt]]
+                    consequences += [[tile.input_direction[direction]], [tile.output_direction[direction]], [tile.is_belt]]  # straight input
                 elif rest_empty:
                     consequences += set_all_false(tile.all_direction)
                 else:
