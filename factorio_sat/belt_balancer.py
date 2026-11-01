@@ -44,21 +44,25 @@ def setup_balancer_ends_with_offsets(grid, network, start_offset: int, end_offse
 
 def setup_balancer_input(grid: Grid, tiles: Sequence[TileTemplate], direction: int, count: int, rest_empty: bool = True,
                          rest_belts: bool = True):
-    """rest_empty=False: the other tiles of the column may be used (nothing enters through the edge there); they are
+    """Every input tile is a STRAIGHT belt along `direction`. It used to fix only the side it is fed from, so an input
+    could turn 90 degrees on its first tile: a belt facing along the edge, whose own direction points to no port (the
+    3-6 TU 11x9 of 2026-10-31). Outputs need no such rule: an output tile fed from its side still leaves through the
+    edge it faces.
+    rest_empty=False: the other tiles of the column may be used (nothing enters through the edge there); they are
     then belts unless rest_belts=False (empty tiles and splitters allowed too, as Raynquist's 1-n TU use)."""
     assert count <= len(tiles)
     offsets = [grid.allocate_variable() for _ in range(len(tiles) - count + 1)]
 
     if len(offsets) == 0:
         for tile in tiles:
-            grid.clauses += [[tile.input_direction[direction]]]
+            grid.clauses += [[tile.input_direction[direction]], [tile.output_direction[direction]], [tile.is_belt]]
     else:
         grid.clauses += quadratic_one(offsets)
         for di, literal in enumerate(offsets):
             consequences = []
             for i, tile in enumerate(tiles):
                 if i in range(di, di + count):
-                    consequences += [[tile.input_direction[direction]], [tile.is_belt]]
+                    consequences += [[tile.input_direction[direction]], [tile.output_direction[direction]], [tile.is_belt]]
                 elif rest_empty:
                     consequences += set_all_false(tile.all_direction)
                 else:
